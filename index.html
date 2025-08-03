@@ -27,6 +27,11 @@
     </script>
     <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script>
+      // 중요: AI 기능을 사용하려면 아래에 자신의 Google AI Studio API 키를 입력하세요.
+      // API 키는 https://aistudio.google.com/app/apikey 에서 발급받을 수 있습니다.
+      window.GEMINI_API_KEY = "AIzaSyAZkb9O1JY4ex4xjd6w9LD9hNe2NhgIy2g";
+    </script>
     <script type="importmap">
 {
   "imports": {
@@ -76,14 +81,20 @@ const CATEGORY_STYLES = {
 
 // --- Gemini Service ---
 let ai;
+let initialError = null;
+
 try {
-  // This will fail in a local file environment where 'process' is not defined.
-  ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  if (!window.GEMINI_API_KEY || window.GEMINI_API_KEY === "여기에_API_키를_입력하세요") {
+    throw new Error("API 키가 설정되지 않았습니다. 이 파일 상단의 window.GEMINI_API_KEY 변수에 자신의 API 키를 입력해주세요.");
+  }
+  ai = new GoogleGenAI({ apiKey: window.GEMINI_API_KEY });
 } catch (e) {
-  console.error("GoogleGenAI 초기화 실패. 로컬 파일로 실행하는 경우 예상된 동작입니다. AI 기능이 비활성화됩니다.", e);
+  console.error("GoogleGenAI 초기화 실패:", e);
+  const errorMessage = e instanceof Error ? e.message : "AI 기능이 비활성화되었습니다.";
+  initialError = errorMessage;
   ai = {
     models: {
-      generateContent: () => Promise.reject(new Error("AI 기능이 비활성화되었습니다. API 키를 설정해주세요.")),
+      generateContent: () => Promise.reject(new Error(errorMessage)),
     }
   };
 }
@@ -117,6 +128,9 @@ const responseSchema = {
 };
 
 const translateFeedback = async (feedback, imagePart) => {
+  if (initialError) {
+      throw new Error(initialError);
+  }
   try {
     const textPart = { text: feedback };
     const contents = imagePart ? { parts: [imagePart, textPart] } : feedback;
@@ -146,11 +160,16 @@ const translateFeedback = async (feedback, imagePart) => {
     if (error instanceof Error && error.message.includes("JSON")) {
         throw new Error("API 응답을 파싱하는 데 실패했습니다. 유효한 JSON이 아닙니다.");
     }
-    throw new Error(`Gemini API 요청 중 문제가 발생했습니다: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Gemini API 요청 중 문제가 발생했습니다: ${message}`);
   }
 };
 
 const generateExamplePrompts = async () => {
+  if (initialError) {
+      console.warn("AI 기능이 비활성화되어 예시를 생성할 수 없습니다.");
+      return [];
+  }
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -240,35 +259,51 @@ const SkeletonCard = () => (
   </div>
 );
 
-const EmptyState = () => (
-    <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-gray-700 rounded-lg">
-        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="text-gray-600 mb-4">
-            <path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>
-        </svg>
-        <h3 className="text-lg font-semibold text-on-surface">결과가 여기에 표시됩니다</h3>
-        <p className="text-on-surface-secondary mt-1">왼쪽 입력창에 피드백을 입력하고<br/>'피드백 구체화하기' 버튼을 눌러주세요.</p>
+const EmptyState = ({ initialError }) => (
+    <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-gray-700 rounded-lg h-full">
+        {initialError ? (
+            <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="text-red-500 mb-4">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" x2="12" y1="8" y2="12" />
+                    <line x1="12" x2="12.01" y1="16" y2="16" />
+                </svg>
+                <h3 className="text-lg font-semibold text-red-400">AI 초기화 오류</h3>
+                <p className="text-on-surface-secondary mt-1 max-w-md">{initialError}</p>
+            </>
+        ) : (
+            <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="text-gray-600 mb-4">
+                    <path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>
+                </svg>
+                <h3 className="text-lg font-semibold text-on-surface">결과가 여기에 표시됩니다</h3>
+                <p className="text-on-surface-secondary mt-1">왼쪽 입력창에 피드백을 입력하고<br/>'피드백 구체화하기' 버튼을 눌러주세요.</p>
+            </>
+        )}
     </div>
 );
 
 function ResultsDisplay({ results, isLoading, error, hasTranslated }) {
+  const showError = error;
+  
   return (
     <div className="bg-surface rounded-lg p-6 shadow-lg h-full">
       <h2 className="text-lg font-semibold text-on-surface mb-4">2. 구체화된 디자인 제안</h2>
       <div className="space-y-4">
         {isLoading && <><SkeletonCard /><SkeletonCard /><SkeletonCard /></>}
-        {!isLoading && error && (
+        {!isLoading && showError && (
           <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg" role="alert">
             <strong className="font-bold">오류 발생: </strong>
-            <span className="block sm:inline">{error}</span>
+            <span className="block sm:inline">{showError}</span>
           </div>
         )}
-        {!isLoading && !error && hasTranslated && results.length === 0 && (
+        {!isLoading && !showError && hasTranslated && results.length === 0 && (
           <div className="text-center py-10 text-on-surface-secondary">
              <p>AI가 제안을 생성하지 못했습니다. <br/> 좀 더 명확한 피드백으로 다시 시도해보세요.</p>
           </div>
         )}
-        {!isLoading && !error && results.length > 0 && results.map((result, index) => <ResultCard key={index} suggestion={result} />)}
-        {!isLoading && !hasTranslated && <EmptyState />}
+        {!isLoading && !showError && results.length > 0 && results.map((result, index) => <ResultCard key={index} suggestion={result} />)}
+        {!isLoading && !hasTranslated && <EmptyState initialError={initialError} />}
       </div>
     </div>
   );
@@ -293,7 +328,7 @@ const RefreshIcon = ({ spinning }) => (
     </svg>
 );
 
-function FeedbackInput({ userInput, setUserInput, image, setImage, onSubmit, isLoading }) {
+function FeedbackInput({ userInput, setUserInput, image, setImage, onSubmit, isLoading, disabled }) {
   const [isDragging, setIsDragging] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
   const [examplePrompts, setExamplePrompts] = useState(EXAMPLE_PROMPTS);
@@ -342,7 +377,7 @@ function FeedbackInput({ userInput, setUserInput, image, setImage, onSubmit, isL
       const newPrompts = await generateExamplePrompts();
       if (newPrompts && newPrompts.length > 0) setExamplePrompts(newPrompts);
     } catch(e) {
-      alert(e.message);
+      console.error(e.message);
     } finally {
       setIsFetchingExamples(false);
     }
@@ -357,26 +392,27 @@ function FeedbackInput({ userInput, setUserInput, image, setImage, onSubmit, isL
       <textarea
         value={userInput}
         onChange={(e) => setUserInput(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(); }}
-        placeholder="예: '좀 더 세련되게 바꿔주세요...'"
-        className="w-full text-base bg-brand-bg border border-gray-600 rounded-md p-3 focus:ring-2 focus:ring-primary focus:outline-none transition-shadow duration-200 resize-none"
+        onKeyDown={(e) => { if (!disabled && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(); }}
+        placeholder={disabled ? "AI 기능이 비활성화되었습니다." : "예: '좀 더 세련되게 바꿔주세요...'"}
+        className="w-full text-base bg-brand-bg border border-gray-600 rounded-md p-3 focus:ring-2 focus:ring-primary focus:outline-none transition-shadow duration-200 resize-none disabled:cursor-not-allowed disabled:opacity-50"
         rows={4}
+        disabled={disabled}
       />
        <div>
         <h3 className="text-base font-medium text-on-surface mb-2">선택사항: 디자인 스크린샷 첨부</h3>
-        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" />
+        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" disabled={disabled} />
         {imagePreview ? (
             <div className="relative group">
                 <img src={imagePreview} alt="Preview" className="w-full h-auto max-h-48 object-contain rounded-md bg-brand-bg" />
-                <button onClick={removeImage} className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity" aria-label="Remove image">
+                {!disabled && <button onClick={removeImage} className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity" aria-label="Remove image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                </button>
+                </button>}
             </div>
         ) : (
             <div
-                onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
-                onClick={() => fileInputRef.current?.click()}
-                className={`flex flex-col justify-center items-center w-full h-32 px-4 text-center border-2 border-dashed rounded-lg cursor-pointer transition-colors ${isDragging ? 'border-primary bg-primary/10' : 'border-gray-600 hover:border-gray-500'}`}
+                onDrop={!disabled ? handleDrop : undefined} onDragOver={!disabled ? handleDragOver : undefined} onDragLeave={!disabled ? handleDragLeave : undefined}
+                onClick={() => !disabled && fileInputRef.current?.click()}
+                className={`flex flex-col justify-center items-center w-full h-32 px-4 text-center border-2 border-dashed rounded-lg transition-colors ${disabled ? 'border-gray-700 bg-black/20 cursor-not-allowed' : `cursor-pointer ${isDragging ? 'border-primary bg-primary/10' : 'border-gray-600 hover:border-gray-500'}`}`}
             >
                 <UploadIcon />
                 <p className="text-sm text-on-surface-secondary">이미지를 드래그 앤 드롭하거나 클릭하여 업로드</p>
@@ -387,13 +423,13 @@ function FeedbackInput({ userInput, setUserInput, image, setImage, onSubmit, isL
       <div>
         <div className="flex items-center justify-between mb-2">
             <p className="text-sm text-on-surface-secondary">혹은 텍스트 예시를 사용해보세요:</p>
-            <button onClick={handleFetchNewExamples} disabled={isFetchingExamples} className="text-on-surface-secondary hover:text-primary disabled:text-gray-600 disabled:cursor-wait p-1 rounded-full transition-colors" aria-label="다른 예시 보기">
+            <button onClick={handleFetchNewExamples} disabled={isFetchingExamples || disabled} className="text-on-surface-secondary hover:text-primary disabled:text-gray-600 disabled:cursor-wait p-1 rounded-full transition-colors" aria-label="다른 예시 보기">
                 <RefreshIcon spinning={isFetchingExamples} />
             </button>
         </div>
         <div className="flex flex-wrap gap-2">
           {examplePrompts.map((prompt) => (
-            <button key={prompt} onClick={() => setUserInput(prompt)} className="text-xs bg-gray-700 text-on-surface-secondary px-3 py-1 rounded-full hover:bg-gray-600 transition-colors">
+            <button key={prompt} onClick={() => !disabled && setUserInput(prompt)} disabled={disabled} className="text-xs bg-gray-700 text-on-surface-secondary px-3 py-1 rounded-full hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               {prompt}
             </button>
           ))}
@@ -401,7 +437,7 @@ function FeedbackInput({ userInput, setUserInput, image, setImage, onSubmit, isL
       </div>
       <button
         onClick={onSubmit}
-        disabled={isLoading || (!userInput.trim() && !image)}
+        disabled={isLoading || (!userInput.trim() && !image) || disabled}
         className="w-full bg-primary text-white font-bold py-3 px-4 rounded-md flex items-center justify-center transition-all duration-200 ease-in-out hover:bg-primary-hover disabled:bg-gray-500 disabled:cursor-not-allowed transform hover:scale-105 active:scale-100 mt-auto"
       >
         {isLoading ? <LoadingSpinner /> : <span className="text-base">피드백 구체화하기 (Ctrl+Enter)</span>}
@@ -417,6 +453,10 @@ const fileToBase64 = (file) => {
     reader.readAsDataURL(file);
     reader.onload = () => {
       const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error("File could not be read as data URL."));
+        return;
+      }
       const mimeType = result.split(';')[0].split(':')[1];
       const data = result.split(',')[1];
       resolve({ mimeType, data });
@@ -431,10 +471,16 @@ function App() {
   const [results, setResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [hasTranslated, setHasTranslated] = useState(false);
+  const [hasTranslated, setHasTranslated] = useState(!!initialError);
+
+  useEffect(() => {
+    if (initialError) {
+        setError(initialError);
+    }
+  }, []);
 
   const handleSubmit = useCallback(async () => {
-    if ((!userInput.trim() && !image) || isLoading) return;
+    if ((!userInput.trim() && !image) || isLoading || initialError) return;
     setIsLoading(true); setError(null); setResults([]); setHasTranslated(true);
     try {
       let imagePart;
@@ -447,7 +493,7 @@ function App() {
       setResults(translatedSuggestions);
     } catch (err) {
       console.error(err);
-      setError(err.message || '피드백을 번역하는 중 오류가 발생했습니다.');
+      setError(err instanceof Error ? err.message : '피드백을 번역하는 중 오류가 발생했습니다.');
     } finally {
       setIsLoading(false);
     }
@@ -458,7 +504,7 @@ function App() {
       <Header />
       <main className="flex-grow container mx-auto p-4 md:p-8 flex flex-col lg:flex-row gap-8">
         <div className="lg:w-1/3 lg:flex-shrink-0">
-          <FeedbackInput {...{userInput, setUserInput, image, setImage, onSubmit: handleSubmit, isLoading}} />
+          <FeedbackInput {...{userInput, setUserInput, image, setImage, onSubmit: handleSubmit, isLoading, disabled: !!initialError}} />
         </div>
         <div className="lg:w-2/3 lg:flex-grow">
           <ResultsDisplay {...{results, isLoading, error, hasTranslated}} />
